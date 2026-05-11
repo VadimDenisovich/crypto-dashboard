@@ -103,6 +103,12 @@ jobs:
                 exit 1
                 ;;
             esac
+            case "$BACKEND_DATABASE_URL" in
+              *://USER:*|*:PASSWORD@*|*/DBNAME|*/DBNAME\?*)
+                echo "BACKEND_DATABASE_URL still contains placeholder values: USER, PASSWORD, or DBNAME"
+                exit 1
+                ;;
+            esac
             case "$BACKEND_REDIS_URL" in
               redis://*|rediss://*) ;;
               *)
