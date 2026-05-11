@@ -96,6 +96,20 @@ jobs:
             : "${BACKEND_CORS_ORIGINS:?BACKEND_CORS_ORIGINS is empty}"
             : "${BACKEND_IMAGE:?BACKEND_IMAGE is empty}"
             : "${FRONTEND_IMAGE:?FRONTEND_IMAGE is empty}"
+            case "$BACKEND_DATABASE_URL" in
+              postgresql+asyncpg://*) ;;
+              *)
+                echo "BACKEND_DATABASE_URL must start with postgresql+asyncpg://"
+                exit 1
+                ;;
+            esac
+            case "$BACKEND_REDIS_URL" in
+              redis://*|rediss://*) ;;
+              *)
+                echo "BACKEND_REDIS_URL must start with redis:// or rediss://"
+                exit 1
+                ;;
+            esac
             BACKEND_LOG_LEVEL="${BACKEND_LOG_LEVEL:-INFO}"
             umask 077
             cat > .env <<EOF
