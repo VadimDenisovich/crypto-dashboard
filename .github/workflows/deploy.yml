@@ -61,16 +61,30 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_REPOSITORY: ${{ github.repository }}
         with:
           host: ${{ secrets.DEPLOY_SSH_HOST }}
           port: ${{ secrets.DEPLOY_SSH_PORT }}
           username: ${{ secrets.DEPLOY_SSH_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          envs: DEPLOY_PATH
+          envs: DEPLOY_PATH,DEPLOY_REPOSITORY
           script: |
             set -euo pipefail
             DEPLOY_PATH="$(printf '%s' "$DEPLOY_PATH" | tr -d '\r\n')"
+            DEPLOY_REPOSITORY="$(printf '%s' "$DEPLOY_REPOSITORY" | tr -d '\r\n')"
+            if [ -z "$DEPLOY_PATH" ]; then
+              echo "DEPLOY_PATH is empty"
+              exit 1
+            fi
+            if [ ! -d "$DEPLOY_PATH/.git" ]; then
+              mkdir -p "$DEPLOY_PATH"
+              git clone --recurse-submodules "https://github.com/$DEPLOY_REPOSITORY.git" "$DEPLOY_PATH"
+            fi
             cd "$DEPLOY_PATH"
+            if [ ! -f .env ]; then
+              echo "Missing $DEPLOY_PATH/.env"
+              exit 1
+            fi
             git fetch --recurse-submodules origin main
             git checkout main
             git reset --hard origin/main
