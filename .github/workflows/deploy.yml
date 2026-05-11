@@ -62,12 +62,20 @@ jobs:
         env:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
           DEPLOY_REPOSITORY: ${{ github.repository }}
+          BACKEND_DATABASE_URL: ${{ secrets.BACKEND_DATABASE_URL }}
+          BACKEND_REDIS_URL: ${{ secrets.BACKEND_REDIS_URL }}
+          BACKEND_JWT_SECRET: ${{ secrets.BACKEND_JWT_SECRET }}
+          BACKEND_ENCRYPTION_KEY: ${{ secrets.BACKEND_ENCRYPTION_KEY }}
+          BACKEND_CORS_ORIGINS: ${{ secrets.BACKEND_CORS_ORIGINS }}
+          BACKEND_LOG_LEVEL: ${{ secrets.BACKEND_LOG_LEVEL }}
+          BACKEND_IMAGE: ${{ needs.build-and-push.outputs.backend_tag }}
+          FRONTEND_IMAGE: ${{ needs.build-and-push.outputs.frontend_tag }}
         with:
           host: ${{ secrets.DEPLOY_SSH_HOST }}
           port: ${{ secrets.DEPLOY_SSH_PORT }}
           username: ${{ secrets.DEPLOY_SSH_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          envs: DEPLOY_PATH,DEPLOY_REPOSITORY
+          envs: DEPLOY_PATH,DEPLOY_REPOSITORY,BACKEND_DATABASE_URL,BACKEND_REDIS_URL,BACKEND_JWT_SECRET,BACKEND_ENCRYPTION_KEY,BACKEND_CORS_ORIGINS,BACKEND_LOG_LEVEL,BACKEND_IMAGE,FRONTEND_IMAGE
           script: |
             set -euo pipefail
             DEPLOY_PATH="$(printf '%s' "$DEPLOY_PATH" | tr -d '\r\n')"
@@ -81,10 +89,25 @@ jobs:
               git clone --recurse-submodules "https://github.com/$DEPLOY_REPOSITORY.git" "$DEPLOY_PATH"
             fi
             cd "$DEPLOY_PATH"
-            if [ ! -f .env ]; then
-              echo "Missing $DEPLOY_PATH/.env"
-              exit 1
-            fi
+            : "${BACKEND_DATABASE_URL:?BACKEND_DATABASE_URL is empty}"
+            : "${BACKEND_REDIS_URL:?BACKEND_REDIS_URL is empty}"
+            : "${BACKEND_JWT_SECRET:?BACKEND_JWT_SECRET is empty}"
+            : "${BACKEND_ENCRYPTION_KEY:?BACKEND_ENCRYPTION_KEY is empty}"
+            : "${BACKEND_CORS_ORIGINS:?BACKEND_CORS_ORIGINS is empty}"
+            : "${BACKEND_IMAGE:?BACKEND_IMAGE is empty}"
+            : "${FRONTEND_IMAGE:?FRONTEND_IMAGE is empty}"
+            BACKEND_LOG_LEVEL="${BACKEND_LOG_LEVEL:-INFO}"
+            umask 077
+            cat > .env <<EOF
+            BACKEND_DATABASE_URL=$BACKEND_DATABASE_URL
+            BACKEND_REDIS_URL=$BACKEND_REDIS_URL
+            BACKEND_JWT_SECRET=$BACKEND_JWT_SECRET
+            BACKEND_ENCRYPTION_KEY=$BACKEND_ENCRYPTION_KEY
+            BACKEND_CORS_ORIGINS=$BACKEND_CORS_ORIGINS
+            BACKEND_LOG_LEVEL=$BACKEND_LOG_LEVEL
+            BACKEND_IMAGE=$BACKEND_IMAGE
+            FRONTEND_IMAGE=$FRONTEND_IMAGE
+            EOF
             git fetch --recurse-submodules origin main
             git checkout main
             git reset --hard origin/main
