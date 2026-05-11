@@ -22,6 +22,9 @@ services:
     container_name: crypto-backend
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      - default
+      - public
     environment:
       BACKEND_DATABASE_URL: ${BACKEND_DATABASE_URL}
       BACKEND_REDIS_URL: ${BACKEND_REDIS_URL}
@@ -32,7 +35,7 @@ services:
       BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS}
       BACKEND_LOG_LEVEL: ${BACKEND_LOG_LEVEL:-INFO}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -41,8 +44,17 @@ services:
   frontend:
     image: ${FRONTEND_IMAGE:-ghcr.io/vadimdenisovich/crypto-dashboard-frontend:latest}
     container_name: crypto-frontend
+    networks:
+      - default
+      - public
     ports:
-      - "5173:80"
+      - "127.0.0.1:5173:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
     depends_on:
       - backend
     restart: unless-stopped
@@ -67,3 +79,8 @@ services:
 #   default:
 #     name: crypto-infra
 #     external: true
+
+networks:
+  public:
+    name: nginx_network
+    external: true

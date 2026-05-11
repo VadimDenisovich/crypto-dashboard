@@ -135,4 +135,5 @@ jobs:
             docker compose pull
             docker compose run --rm migrate
             docker compose up -d --remove-orphans
+            docker exec nginx nginx -s reload || true
             docker image prune -f
