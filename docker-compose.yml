@@ -1,0 +1,65 @@
+# Production-ish compose: ожидает, что Postgres и Redis уже подняты на сервере
+# (в /docker) и доступны через внешнюю docker-сеть либо по доменам/IP.
+# Для локалки используйте docker-compose.dev.yml как override:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  migrate:
+    image: ${BACKEND_IMAGE:-ghcr.io/vadimdenisovich/crypto-dashboard-backend:latest}
+    container_name: crypto-migrate
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      BACKEND_DATABASE_URL: ${BACKEND_DATABASE_URL}
+      BACKEND_REDIS_URL: ${BACKEND_REDIS_URL}
+      BACKEND_JWT_SECRET: ${BACKEND_JWT_SECRET}
+      BACKEND_ENCRYPTION_KEY: ${BACKEND_ENCRYPTION_KEY}
+    restart: "no"
+
+  backend:
+    image: ${BACKEND_IMAGE:-ghcr.io/vadimdenisovich/crypto-dashboard-backend:latest}
+    container_name: crypto-backend
+    environment:
+      BACKEND_DATABASE_URL: ${BACKEND_DATABASE_URL}
+      BACKEND_REDIS_URL: ${BACKEND_REDIS_URL}
+      BACKEND_JWT_SECRET: ${BACKEND_JWT_SECRET}
+      BACKEND_ENCRYPTION_KEY: ${BACKEND_ENCRYPTION_KEY}
+      BACKEND_ACCESS_TOKEN_TTL_MIN: ${BACKEND_ACCESS_TOKEN_TTL_MIN:-15}
+      BACKEND_REFRESH_TOKEN_TTL_DAYS: ${BACKEND_REFRESH_TOKEN_TTL_DAYS:-7}
+      BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS}
+      BACKEND_LOG_LEVEL: ${BACKEND_LOG_LEVEL:-INFO}
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-ghcr.io/vadimdenisovich/crypto-dashboard-frontend:latest}
+    container_name: crypto-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # engine:
+  #   image: ${ENGINE_IMAGE:-ghcr.io/vadimdenisovich/crypto-trade-engine:latest}
+  #   container_name: crypto-engine
+  #   environment:
+  #     ENGINE_DATABASE_URL: ${BACKEND_DATABASE_URL}
+  #     ENGINE_REDIS_URL: ${BACKEND_REDIS_URL}
+  #   depends_on:
+  #     - backend
+  #   restart: unless-stopped
+  #   # TODO: в trade-engine-crypto пока нет entrypoint'а (нет __main__ или CLI).
+  #   # Раскомментировать после реализации в движке.
+
+# По умолчанию контейнеры в одной сети compose'а. На сервере подключите
+# постгрес/редис через external-сеть (раскомментируйте блок ниже и пропишите
+# фактическое имя сети, например имя проекта compose'а для postgres):
+#
+# networks:
+#   default:
+#     name: crypto-infra
+#     external: true

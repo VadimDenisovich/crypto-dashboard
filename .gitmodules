@@ -1,0 +1,9 @@
+[submodule "trade-engine-crypto"]
+	path = trade-engine-crypto
+	url = https://github.com/VadimDenisovich/crypto-trade-engine.git
+[submodule "backend"]
+	path = backend
+	url = https://github.com/VadimDenisovich/crypto-dashboard-backend.git
+[submodule "frontend"]
+	path = frontend
+	url = https://github.com/VadimDenisovich/crypto-dashboard-frontend.git
