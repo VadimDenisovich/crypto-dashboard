@@ -32,7 +32,7 @@
                                           │
                                        ccxt.pro
                                           │
-                                  Binance / Bybit
+                                     Binance
 ```
 
 **Контракт через Redis Pub/Sub** (имена каналов взяты из [trade-engine-crypto/src/application/events.py](trade-engine-crypto/src/application/events.py)):

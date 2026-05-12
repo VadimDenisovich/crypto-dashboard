@@ -59,17 +59,24 @@ services:
       - backend
     restart: unless-stopped
 
-  # engine:
-  #   image: ${ENGINE_IMAGE:-ghcr.io/vadimdenisovich/crypto-trade-engine:latest}
-  #   container_name: crypto-engine
-  #   environment:
-  #     ENGINE_DATABASE_URL: ${BACKEND_DATABASE_URL}
-  #     ENGINE_REDIS_URL: ${BACKEND_REDIS_URL}
-  #   depends_on:
-  #     - backend
-  #   restart: unless-stopped
-  #   # TODO: в trade-engine-crypto пока нет entrypoint'а (нет __main__ или CLI).
-  #   # Раскомментировать после реализации в движке.
+  engine:
+    image: ${ENGINE_IMAGE:-ghcr.io/vadimdenisovich/crypto-trade-engine:latest}
+    container_name: crypto-engine
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      ENGINE_DATABASE_URL: ${ENGINE_DATABASE_URL:-${BACKEND_DATABASE_URL}}
+      ENGINE_REDIS_URL: ${ENGINE_REDIS_URL:-${BACKEND_REDIS_URL}}
+      ENGINE_ENCRYPTION_KEY: ${ENGINE_ENCRYPTION_KEY:-${BACKEND_ENCRYPTION_KEY}}
+      ENGINE_LOG_LEVEL: ${ENGINE_LOG_LEVEL:-INFO}
+      ENGINE_HEARTBEAT_INTERVAL_SEC: ${ENGINE_HEARTBEAT_INTERVAL_SEC:-10}
+      ENGINE_BALANCE_POLL_INTERVAL_SEC: ${ENGINE_BALANCE_POLL_INTERVAL_SEC:-15}
+      ENGINE_STATE_SNAPSHOT_TTL_SEC: ${ENGINE_STATE_SNAPSHOT_TTL_SEC:-30}
+      ENGINE_COMMAND_DEDUP_TTL_SEC: ${ENGINE_COMMAND_DEDUP_TTL_SEC:-86400}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
 # По умолчанию контейнеры в одной сети compose'а. На сервере подключите
 # постгрес/редис через external-сеть (раскомментируйте блок ниже и пропишите
