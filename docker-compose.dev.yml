@@ -12,6 +12,7 @@ services:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
+      PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -42,6 +43,7 @@ services:
     image: !reset null
     build:
       context: ./backend
+    command: ["alembic", "upgrade", "head"]
     environment:
       BACKEND_DATABASE_URL: postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
       BACKEND_REDIS_URL: redis://redis:6379/0
@@ -67,6 +69,14 @@ services:
       - ./backend/src:/app/src
       - ./backend/alembic:/app/alembic
     command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
   frontend:
     image: !reset null
@@ -74,12 +84,14 @@ services:
       context: ./frontend
       dockerfile: Dockerfile.dev
     environment:
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000/api/}
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
       VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:8000/ws/updates}
     volumes:
       - ./frontend:/app
       - /app/node_modules
     command: ["pnpm", "dev", "--host", "0.0.0.0"]
+    ports:
+      - "5173:5173"
     stdin_open: true
 
 volumes:
