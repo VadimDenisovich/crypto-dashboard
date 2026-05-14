@@ -2,8 +2,8 @@ name: ci
 
 on:
   push:
-    branches: ["**"]
-  pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
   backend-test:
@@ -94,3 +94,9 @@ jobs:
           context: ./frontend
           push: false
           tags: crypto-dashboard-frontend:ci
+      - name: Build engine image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./trade-engine-crypto
+          push: false
+          tags: crypto-trade-engine:ci

@@ -379,8 +379,255 @@ docker compose logs backend -f
 
 - Dark/Light темы (тоггл уже в UI, прикрутить к `next-themes`).
 - Графики: сделки на свечном графике через `recharts` (уже в package.json).
-- Бэктестинг — отдельная страница, отдельный endpoint на бэке (Phase 3+).
 - i18n (ru/en) — `react-i18next`.
+
+---
+
+## Phase 7. Бэктестинг — `[ENGINE] [BACKEND] [FRONTEND]`
+
+Цель: дать пользователю прогнать стратегию на исторических данных и увидеть метрики, **не запуская реальной торговли**. Архитектура движка уже к этому готова: `MarketDataProvider`, `ExchangeAdapter`, `Strategy` — это интерфейсы. Достаточно подложить им «исторические» и «симулированные» реализации, и `StrategyRunner` будет работать как обычно. Никакой ветки `if backtest_mode:` в боевом коде стратегий или Risk/Order слоях не должно появиться.
+
+**Pipeline:**
+
+```
+Frontend (форма)
+    │  POST /api/backtest/run {strategy, symbol, timeframe, params, from, to, initial_balance}
+    ▼
+Backend
+    │  1. валидирует, создаёт backtest_jobs (status=queued)
+    │  2. кладёт job_id в asyncio.Queue (Phase 7) или Redis Stream (Phase 7.5+)
+    ▼
+BacktestWorker (asyncio task в процессе бэка)
+    │  3. грузит исторические свечи (parquet из ./data/historical/ или CCXT REST)
+    │  4. создаёт SimulatedExchangeAdapter + CSVMarketDataProvider
+    │  5. создаёт стратегию из default_registry() движка
+    │  6. крутит StrategyRunner до конца истории
+    │  7. считает метрики, пишет в backtest_jobs.result, status=completed
+    ▼
+Frontend
+    │  poll GET /api/backtest/{id}
+    │  отображает equity curve, метрики, список сделок
+```
+
+### 7.1 Скачивание исторических данных — `[ENGINE] scripts/`
+
+Файл: `scripts/fetch_historical.py`. Качает свечи через CCXT REST и сохраняет parquet.
+
+```bash
+python scripts/fetch_historical.py \
+    --exchange binance \
+    --symbol "BTC/USDT" \
+    --timeframe 1m \
+    --from 2024-01-01 \
+    --to 2024-12-31 \
+    --output data/historical/binance_btc_usdt_1m_2024.parquet
+```
+
+Особенности:
+- CCXT `fetch_ohlcv` лимит 1000 свечей за запрос → пагинируем по `since`.
+- Между запросами `await asyncio.sleep(exchange.rateLimit / 1000)`, чтобы не словить ban.
+- Прогресс-бар через `tqdm`, сохраняем порциями (на случай обрыва — возобновление).
+- Формат: parquet с колонками `timestamp, open, high, low, close, volume`, типы — `int64` для timestamp (ms), `string` для Decimal-like значений (`"100.5"` а не float — чтобы при чтении в backtest получить точный Decimal).
+- Папка `./data/historical/` — в `.gitignore` (большие файлы).
+
+Дополнительно: `data/historical/INDEX.json` — реестр доступных файлов (`{symbol, timeframe, from, to, rows, path}`), чтобы backend мог быстро узнать «есть ли уже скачанное».
+
+### 7.2 `SimulatedExchangeAdapter` — `[ENGINE]`
+
+Файл: `trade-engine-crypto/src/infrastructure/simulated_exchange.py`. Реализует `ExchangeAdapter` без сети.
+
+- В конструктор: `initial_balance: dict[str, Decimal]` (например `{"USDT": Decimal("10000")}`).
+- В памяти: `self._balance: dict[str, Balance]`, `self._fee_rate: Decimal` (по умолчанию `0.001` = 0.1%, как у Binance spot).
+- `create_order(symbol, side, type, size, price)`:
+  - `MARKET`: исполняется немедленно по **`last_close * (1 + slippage)`** для BUY, `last_close * (1 - slippage)` для SELL. `slippage = Decimal("0.0005")` по умолчанию.
+  - `LIMIT`: добавляется в `self._open_orders`. На каждой следующей свече SimulatedExchangeAdapter получает callback `on_candle(candle)` и проверяет: если `candle.low <= limit_price <= candle.high` — ордер исполнен.
+  - Списывает баланс: для BUY `quote -= size * fill_price * (1 + fee)`, добавляет `base += size`. Для SELL — наоборот.
+  - Если баланс отрицательный после операции — бросает `OrderExecutionError("insufficient simulated balance")`. Это та же логика, что RiskManager должен проверить ДО — но страховка не помешает.
+  - Возвращает `Order` с `status=FILLED` (для MARKET) или `OPEN` (для LIMIT).
+- `fetch_ohlcv(symbol, timeframe, since, limit)` — отдаёт исторические свечи из источника (CSVMarketDataProvider передаёт ссылку на DataFrame в конструктор). Нужно для warmup стратегии.
+- `get_balance()` → текущий `self._balance`.
+- `close()` → no-op.
+
+Hook для backtest_runner: `adapter.subscribe_to_candle_stream(stream)` — провайдер подписывается на тот же поток, что и стратегия, и обновляет `self._last_close`, проверяет LIMIT-ордера.
+
+### 7.3 `CSVMarketDataProvider` — `[ENGINE]`
+
+Файл: `trade-engine-crypto/src/infrastructure/csv_market_data.py`. Реализует `MarketDataProvider`. Читает parquet → AsyncIterator[Candle].
+
+```python
+class CSVMarketDataProvider(MarketDataProvider):
+    def __init__(self, parquet_path: Path, symbol: str, timeframe: TimeFrame): ...
+
+    def subscribe(self, symbol, timeframe) -> AsyncIterator[Candle]:
+        return self._iter()
+
+    async def _iter(self) -> AsyncIterator[Candle]:
+        df = pd.read_parquet(self._path)
+        for row in df.itertuples(index=False):
+            yield _to_candle(self._symbol, self._timeframe, row)
+            # ВАЖНО: `await asyncio.sleep(0)` чтобы дать другим тасочкам (SimulatedExchange
+            # проверка LIMIT, BacktestRunner подсчёт метрик) исполниться
+            await asyncio.sleep(0)
+```
+
+Зависимости: `pyarrow>=15`, `pandas>=2.2` — добавить в pyproject движка (`[project.optional-dependencies] backtest = [...]`, чтобы не тянуть в боевой образ).
+
+### 7.4 `BacktestRunner` — `[ENGINE]`
+
+Файл: `trade-engine-crypto/src/application/backtest_runner.py`. Не наследует `StrategyRunner` — композирует его:
+
+```python
+@dataclass
+class BacktestResult:
+    initial_balance: dict[str, Decimal]
+    final_balance: dict[str, Decimal]
+    total_return_pct: Decimal
+    max_drawdown_pct: Decimal
+    sharpe_ratio: Decimal | None  # None если <2 сделок
+    trades_count: int
+    win_rate: Decimal
+    profit_factor: Decimal | None
+    trades: list[BacktestTrade]
+    equity_curve: list[EquityPoint]
+
+
+class BacktestRunner:
+    async def run(self) -> BacktestResult:
+        # 1. собрать SimulatedExchangeAdapter + CSVMarketDataProvider
+        # 2. EventBus — в-памяти (InMemoryEventBus) — каждое engine.new_trade
+        #    идёт в self._trades, каждое engine.balance_update — в self._equity_points
+        # 3. RiskManager и OrderExecutor — те же что в live
+        # 4. StrategyRunner.run() до StopIteration от market data
+        # 5. посчитать метрики
+        # 6. вернуть BacktestResult
+```
+
+**Метрики:**
+- `total_return_pct = (final_equity / initial_equity - 1) * 100`. Equity = USDT + last_close * BTC.
+- `max_drawdown_pct = max((peak_equity - trough_equity) / peak_equity * 100)` по всей equity curve.
+- `sharpe_ratio = mean(returns) / std(returns) * sqrt(periods_per_year)`. `returns` — пер-свечные доходности equity. Для 1m свечей `periods_per_year = 60*24*365 = 525600`.
+- `win_rate = winning_trades / total_trades`.
+- `profit_factor = sum(profits) / abs(sum(losses))` или `None` если losses==0.
+
+Equity curve — это `list[(timestamp, equity_value)]` — записывается раз в N свечей (например, раз в час) или раз в день для длинных бэктестов, чтобы JSON в БД не разрос.
+
+### 7.5 Backend: storage, API, worker — `[BACKEND]`
+
+**Миграция:** `backend/alembic/versions/<id>_add_backtest_jobs.py`
+
+```sql
+CREATE TABLE backtest_jobs (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status VARCHAR(16) NOT NULL,  -- 'queued', 'running', 'completed', 'failed'
+    strategy_class VARCHAR(64) NOT NULL,
+    symbol VARCHAR(32) NOT NULL,
+    timeframe VARCHAR(8) NOT NULL,
+    params JSONB NOT NULL,
+    date_from TIMESTAMPTZ NOT NULL,
+    date_to TIMESTAMPTZ NOT NULL,
+    initial_balance JSONB NOT NULL,  -- {"USDT": "10000"}
+    result JSONB,                    -- BacktestResult в виде JSON, NULL пока running
+    error_message TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ
+);
+CREATE INDEX ON backtest_jobs (user_id, created_at DESC);
+```
+
+**API endpoints** (`backend/src/api/routers/backtest.py`):
+
+```python
+POST   /api/backtest/run         -> {job_id}
+GET    /api/backtest/{id}        -> {status, result?, error_message?}
+GET    /api/backtest             -> [list user's jobs, paginated]
+DELETE /api/backtest/{id}
+```
+
+**Worker:** `backend/src/services/backtest_worker.py` — asyncio task, стартует в `main.py` lifespan-handler.
+
+```python
+async def backtest_worker(queue: asyncio.Queue[uuid.UUID], db, settings):
+    while True:
+        job_id = await queue.get()
+        try:
+            await _run_one(job_id, db, settings)
+        except Exception as exc:
+            logger.exception("backtest job failed", job_id=str(job_id))
+            await _mark_failed(job_id, str(exc))
+```
+
+`_run_one`:
+1. Загружает job из БД, status → 'running'.
+2. Запускает backtest как **subprocess** движка: `python -m engine_main backtest --config <json>`. Subprocess потому что:
+   - изоляция: pandas/pyarrow тяжёлые, не хочется грузить в бэк-процесс
+   - можно kill subprocess по таймауту
+   - можно вынести в отдельный контейнер `engine-worker` потом
+3. Парсит JSON-результат из stdout subprocess'а, пишет в `backtest_jobs.result`, status → 'completed'.
+4. При исключении → status='failed', error_message.
+
+**Альтернатива (проще для MVP):** прямой Python import движка в бэке. Но тогда `pandas/pyarrow` нужны в бэк-образе → +200 MB. Решение — отдельный контейнер `engine-backtest-worker` с `[backtest]` deps.
+
+### 7.6 Engine CLI для бэктеста — `[ENGINE]`
+
+В `pyproject.toml`:
+```toml
+[project.scripts]
+trade-engine = "engine_main:main"
+trade-engine-backtest = "backtest_main:main"
+```
+
+`src/backtest_main.py`:
+```python
+import argparse, json, sys
+from pathlib import Path
+# ... reads --config <path-to-json> with {strategy, symbol, timeframe, params,
+#     historical_data_path, initial_balance, fee_rate, slippage}
+# Runs BacktestRunner synchronously (asyncio.run)
+# Outputs BacktestResult as JSON to stdout, exits 0
+# On error → JSON {"error": "..."} to stdout, exit 1
+```
+
+### 7.7 Frontend — страница бэктеста — `[FRONTEND]`
+
+Файлы:
+- `frontend/src/app/pages/Backtest.tsx` — форма + список прошлых прогонов.
+- `frontend/src/app/pages/BacktestResult.tsx` — детали одного прогона.
+- `frontend/src/api/backtest.ts` — клиент.
+
+Форма:
+- Выбор стратегии (selector из реестра).
+- Параметры стратегии (динамическая форма по схеме параметров — Phase 7.7 простая, все поля text input).
+- Symbol/timeframe (selector).
+- Date range picker.
+- Initial balance (число).
+- Кнопка «Запустить» → POST /api/backtest/run → редирект на `/backtest/{id}`.
+
+Страница результата:
+- Polling `GET /api/backtest/{id}` каждые 2 секунды пока `status != completed/failed`.
+- Equity curve через `recharts` (есть в package.json).
+- Карточки метрик: total return, max drawdown, sharpe, win rate, trades count.
+- Таблица сделок с пагинацией.
+
+### 7.8 Тесты — `[ENGINE] [BACKEND]`
+
+- **Engine:** unit-тесты `SimulatedExchangeAdapter` (MARKET, LIMIT, fee, slippage, insufficient balance), `CSVMarketDataProvider` (валидное чтение parquet, корректный порядок), `BacktestRunner` на фейковой стратегии (генерирует BUY на свече N, SELL на свече N+10) — проверяем метрики.
+- **Backend:** integration тест на POST /api/backtest/run + ожидание completed + проверка result.
+- **End-to-end (опционально):** подготовить маленький parquet с 100 свечами в `tests/fixtures/`, прогнать SmaCross, ожидать конкретное число сделок и P&L.
+
+### ✅ Готово, когда
+- `scripts/fetch_historical.py --symbol BTC/USDT --timeframe 1m --from 2024-01-01 --to 2024-01-31 --output data/historical/btc_1m_jan2024.parquet` — скачивает за <5 минут, файл валиден.
+- `trade-engine-backtest --config tests/fixtures/sma_cross_config.json` — выводит JSON-результат за <30 секунд для 1 месяца 1m данных.
+- POST /api/backtest/run + polling GET /api/backtest/{id} → результат с метриками за <1 минуту для месяца данных.
+- На фронте: запуск бэктеста через форму → equity curve + метрики отображаются.
+- Покрытие тестами: `SimulatedExchangeAdapter` ≥ 90%, `BacktestRunner` ≥ 80%, метрики проверены на синтетике с известным ответом.
+
+### Что НЕ делается в Phase 7 (отложено)
+- **Walk-forward оптимизация** — генетический поиск параметров на скользящих окнах. Phase 8 или позже.
+- **Реалистичный orderbook simulation** — учёт depth, partial fills, реалистичный slippage по объёму. Сейчас MARKET = `close * (1 ± 0.05%)`.
+- **Распределённые worker'ы** — RQ/Celery с отдельным контейнером. Сейчас один in-process worker — достаточно для одиночных прогонов.
+- **Параллельный бэктест** нескольких стратегий — пока строго FIFO в очереди.
+- **Поддержка нескольких бирж/символов в одном бэктесте** (multi-asset portfolio) — Phase 8+.
 
 ---
 
@@ -390,6 +637,7 @@ docker compose logs backend -f
 - [ ] Пользователь регистрируется на `/login`, добавляет credentials Binance Testnet, создаёт бота с SMA Cross, нажимает Start.
 - [ ] Через 1–2 минуты в UI появляются realtime-обновления баланса и первая сделка (если рынок сгенерил сигнал) или хотя бы heartbeat `engine.status`.
 - [ ] Логи бэка показывают подписку на `engine.*`; логи движка показывают подписку на `engine.commands.*`.
+- [ ] Бэктест: пользователь запускает SMA Cross на 1 месяце исторических данных через UI → видит equity curve и метрики (Phase 7).
 - [ ] Push в `main` → автодеплой на сервер → новый билд работает.
 - [ ] `pytest` в обоих submodule зелёный (юнит + интеграция).
 - [ ] В публичных репо **нет** реальных секретов; `grep -RIn -E "(password|08022005|31\.200|BEGIN PRIVATE)" .` пусто.

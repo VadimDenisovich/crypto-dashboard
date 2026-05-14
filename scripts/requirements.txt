@@ -1,0 +1,6 @@
+# Зависимости для скриптов в этой папке.
+# Ставится в отдельный venv: python -m venv .venv-scripts && source .venv-scripts/bin/activate
+
+asyncpg>=0.29
+passlib[bcrypt]>=1.7
+python-dotenv>=1.0

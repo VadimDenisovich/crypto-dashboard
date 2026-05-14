@@ -82,6 +82,21 @@ services:
     command: ["pnpm", "dev", "--host", "0.0.0.0"]
     stdin_open: true
 
+  engine:
+    image: !reset null
+    build:
+      context: ./trade-engine-crypto
+    environment:
+      ENGINE_DATABASE_URL: postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
+      ENGINE_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
 volumes:
   postgres_data:
   redis_data:
