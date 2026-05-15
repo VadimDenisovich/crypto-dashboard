@@ -52,6 +52,11 @@ jobs:
         with:
           context: ./frontend
           push: true
+          # Vite вшивает VITE_* на этапе билда — пробрасываем через build args.
+          build-args: |
+            VITE_API_URL=${{ secrets.VITE_API_URL }}
+            VITE_WS_URL=${{ secrets.VITE_WS_URL }}
+            VITE_HCAPTCHA_SITEKEY=${{ secrets.HCAPTCHA_SITEKEY }}
           tags: |
             ${{ steps.meta.outputs.frontend_tag }}
             ${{ steps.meta.outputs.frontend_latest }}
@@ -79,15 +84,32 @@ jobs:
           BACKEND_ENCRYPTION_KEY: ${{ secrets.BACKEND_ENCRYPTION_KEY }}
           BACKEND_CORS_ORIGINS: ${{ secrets.BACKEND_CORS_ORIGINS }}
           BACKEND_LOG_LEVEL: ${{ secrets.BACKEND_LOG_LEVEL }}
+          BACKEND_FRONTEND_URL: ${{ secrets.BACKEND_FRONTEND_URL }}
           BACKEND_IMAGE: ${{ needs.build-and-push.outputs.backend_tag }}
           FRONTEND_IMAGE: ${{ needs.build-and-push.outputs.frontend_tag }}
           ENGINE_IMAGE: ${{ needs.build-and-push.outputs.engine_tag }}
+          # === Phase 2: Identity providers ===
+          HCAPTCHA_SECRET: ${{ secrets.HCAPTCHA_SECRET }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_SENDER_EMAIL: ${{ secrets.RESEND_SENDER_EMAIL }}
+          RESEND_SENDER_NAME: ${{ secrets.RESEND_SENDER_NAME }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REDIRECT_URI: ${{ secrets.GOOGLE_REDIRECT_URI }}
+          YANDEX_CLIENT_ID: ${{ secrets.YANDEX_CLIENT_ID }}
+          YANDEX_CLIENT_SECRET: ${{ secrets.YANDEX_CLIENT_SECRET }}
+          YANDEX_REDIRECT_URI: ${{ secrets.YANDEX_REDIRECT_URI }}
+          GH_CLIENT_ID: ${{ secrets.GH_CLIENT_ID }}
+          GH_CLIENT_SECRET: ${{ secrets.GH_CLIENT_SECRET }}
+          GH_REDIRECT_URI: ${{ secrets.GH_REDIRECT_URI }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_BOT_USERNAME: ${{ secrets.TELEGRAM_BOT_USERNAME }}
         with:
           host: ${{ secrets.DEPLOY_SSH_HOST }}
           port: ${{ secrets.DEPLOY_SSH_PORT }}
           username: ${{ secrets.DEPLOY_SSH_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          envs: DEPLOY_PATH,DEPLOY_REPOSITORY,BACKEND_DATABASE_URL,BACKEND_REDIS_URL,BACKEND_JWT_SECRET,BACKEND_ENCRYPTION_KEY,BACKEND_CORS_ORIGINS,BACKEND_LOG_LEVEL,BACKEND_IMAGE,FRONTEND_IMAGE,ENGINE_IMAGE
+          envs: DEPLOY_PATH,DEPLOY_REPOSITORY,BACKEND_DATABASE_URL,BACKEND_REDIS_URL,BACKEND_JWT_SECRET,BACKEND_ENCRYPTION_KEY,BACKEND_CORS_ORIGINS,BACKEND_LOG_LEVEL,BACKEND_FRONTEND_URL,BACKEND_IMAGE,FRONTEND_IMAGE,ENGINE_IMAGE,HCAPTCHA_SECRET,RESEND_API_KEY,RESEND_SENDER_EMAIL,RESEND_SENDER_NAME,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GOOGLE_REDIRECT_URI,YANDEX_CLIENT_ID,YANDEX_CLIENT_SECRET,YANDEX_REDIRECT_URI,GH_CLIENT_ID,GH_CLIENT_SECRET,GH_REDIRECT_URI,TELEGRAM_BOT_TOKEN,TELEGRAM_BOT_USERNAME
           script: |
             set -euo pipefail
             DEPLOY_PATH="$(printf '%s' "$DEPLOY_PATH" | tr -d '\r\n')"
@@ -106,6 +128,7 @@ jobs:
             : "${BACKEND_JWT_SECRET:?BACKEND_JWT_SECRET is empty}"
             : "${BACKEND_ENCRYPTION_KEY:?BACKEND_ENCRYPTION_KEY is empty}"
             : "${BACKEND_CORS_ORIGINS:?BACKEND_CORS_ORIGINS is empty}"
+            : "${BACKEND_FRONTEND_URL:?BACKEND_FRONTEND_URL is empty}"
             : "${BACKEND_IMAGE:?BACKEND_IMAGE is empty}"
             : "${FRONTEND_IMAGE:?FRONTEND_IMAGE is empty}"
             : "${ENGINE_IMAGE:?ENGINE_IMAGE is empty}"
@@ -130,9 +153,10 @@ jobs:
                 ;;
             esac
             BACKEND_LOG_LEVEL="${BACKEND_LOG_LEVEL:-INFO}"
+            RESEND_SENDER_NAME="${RESEND_SENDER_NAME:-Crypto Dashboard}"
             umask 077
-            # Движок шарит БД, Redis и Fernet-ключ с бэком. Если позже захочется их
-            # разделить — добавьте отдельные ENGINE_* секреты в GitHub Actions.
+            # Движок шарит БД, Redis и Fernet-ключ с бэком. Bal Phase 2 добавлены
+            # OAuth/Resend/hCaptcha переменные — они нужны только бэку.
             cat > .env <<EOF
             BACKEND_DATABASE_URL=$BACKEND_DATABASE_URL
             BACKEND_REDIS_URL=$BACKEND_REDIS_URL
@@ -140,6 +164,7 @@ jobs:
             BACKEND_ENCRYPTION_KEY=$BACKEND_ENCRYPTION_KEY
             BACKEND_CORS_ORIGINS=$BACKEND_CORS_ORIGINS
             BACKEND_LOG_LEVEL=$BACKEND_LOG_LEVEL
+            BACKEND_FRONTEND_URL=$BACKEND_FRONTEND_URL
             BACKEND_IMAGE=$BACKEND_IMAGE
             FRONTEND_IMAGE=$FRONTEND_IMAGE
             ENGINE_IMAGE=$ENGINE_IMAGE
@@ -147,6 +172,21 @@ jobs:
             ENGINE_REDIS_URL=$BACKEND_REDIS_URL
             ENGINE_ENCRYPTION_KEY=$BACKEND_ENCRYPTION_KEY
             ENGINE_LOG_LEVEL=$BACKEND_LOG_LEVEL
+            HCAPTCHA_SECRET=$HCAPTCHA_SECRET
+            RESEND_API_KEY=$RESEND_API_KEY
+            RESEND_SENDER_EMAIL=$RESEND_SENDER_EMAIL
+            RESEND_SENDER_NAME=$RESEND_SENDER_NAME
+            GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
+            GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET
+            GOOGLE_REDIRECT_URI=$GOOGLE_REDIRECT_URI
+            YANDEX_CLIENT_ID=$YANDEX_CLIENT_ID
+            YANDEX_CLIENT_SECRET=$YANDEX_CLIENT_SECRET
+            YANDEX_REDIRECT_URI=$YANDEX_REDIRECT_URI
+            GH_CLIENT_ID=$GH_CLIENT_ID
+            GH_CLIENT_SECRET=$GH_CLIENT_SECRET
+            GH_REDIRECT_URI=$GH_REDIRECT_URI
+            TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
+            TELEGRAM_BOT_USERNAME=$TELEGRAM_BOT_USERNAME
             EOF
             git fetch --recurse-submodules origin main
             git checkout main

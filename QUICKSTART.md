@@ -1,143 +1,127 @@
-# QUICKSTART — первый запуск торговли через UI
+# QUICKSTART — первый запуск с новой авторизацией (Phase 2)
 
-Этот гайд проводит от свежего клона / свежего деплоя до первой сделки на Binance Testnet через веб-интерфейс. Никаких seed-скриптов с захардкоженными ботами — всё конфигурируется через UI.
+После Phase 2 регистрация через email+пароль убрана. Вход — **email-код** (отправка через Resend) или один из 4 OAuth-провайдеров (Google, Yandex, GitHub, Telegram).
 
 ---
 
 ## A. На прод-сервере
 
-Если у тебя уже развёрнут проект на сервере (через `deploy.yml`):
+После push в `main` GitHub Actions сам соберёт три образа в GHCR и задеплоит на сервер. Чтобы это заработало в первый раз — настрой секреты и сторонние сервисы.
 
-### 1. Убедись, что engine задеплоен
+### 1. GitHub Secrets
 
-В обновлённом `deploy.yml` добавлен build & push образа `crypto-trade-engine`. Чтобы это применилось:
+Уже должно быть (Phase 0):
+`DEPLOY_SSH_HOST`, `DEPLOY_SSH_PORT`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_PATH`, `BACKEND_DATABASE_URL`, `BACKEND_REDIS_URL`, `BACKEND_JWT_SECRET`, `BACKEND_ENCRYPTION_KEY`, `BACKEND_CORS_ORIGINS`, `BACKEND_LOG_LEVEL`.
+
+**Добавить для Phase 2:**
+
+| Secret | Что в нём | Где взять |
+|---|---|---|
+| `BACKEND_FRONTEND_URL` | `https://crypto.shilkaphilosophy.ru` | твой домен фронта |
+| `VITE_API_URL` | `https://crypto.shilkaphilosophy.ru/api/` | публичный URL бэка |
+| `VITE_WS_URL` | `wss://crypto.shilkaphilosophy.ru/ws/updates` | публичный WS |
+| `HCAPTCHA_SITEKEY` | публичный sitekey | hCaptcha dashboard |
+| `HCAPTCHA_SECRET` | серверный секрет | там же |
+| `RESEND_API_KEY` | API key | https://resend.com/api-keys |
+| `RESEND_SENDER_EMAIL` | `noreply@crypto.shilkaphilosophy.ru` | домен должен быть верифицирован в Resend |
+| `RESEND_SENDER_NAME` | `Crypto Dashboard` | произвольно |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` | OAuth | Google Cloud Console |
+| `YANDEX_CLIENT_ID`, `YANDEX_CLIENT_SECRET`, `YANDEX_REDIRECT_URI` | OAuth | https://oauth.yandex.ru/ |
+| `GH_CLIENT_ID`, `GH_CLIENT_SECRET`, `GH_REDIRECT_URI` | OAuth | https://github.com/settings/developers |
+| `TELEGRAM_BOT_TOKEN` | токен бота | @BotFather |
+| `TELEGRAM_BOT_USERNAME` | `crypto_dashboard_kurs_bot` | имя бота без @ |
+
+### 2. Действия в сторонних сервисах
+
+- **Resend:** залогинься, добавь домен `crypto.shilkaphilosophy.ru`, пройди DKIM/SPF верификацию. Создай API key.
+- **@BotFather (Telegram):**
+  1. `/setdomain` → выбери `@crypto_dashboard_kurs_bot` → введи `crypto.shilkaphilosophy.ru`. Без этого виджет на проде вернёт «origin not allowed».
+- **Google Cloud Console / Yandex OAuth / GitHub OAuth App:** в каждом из них убедись, что redirect URI **точно совпадает** с одноимённым `*_REDIRECT_URI` секретом (с `https://`, без trailing slash).
+
+### 3. Push и деплой
 
 ```bash
-# В корне crypto-dashboard локально:
-git add docker-compose.yml .github/workflows/deploy.yml
-git commit -m "feat: add engine to deploy pipeline"
+# Из корня crypto-dashboard локально:
 git push origin main
 ```
 
-GitHub Actions соберёт `ghcr.io/<owner>/crypto-trade-engine:<sha>` и задеплоит на сервер.
+GitHub Actions:
+- Соберёт три образа: backend, frontend (с вшитым `VITE_HCAPTCHA_SITEKEY`), engine.
+- Зальёт по SSH, перепишет `.env`, прогонит миграции (включая `0002_oauth_identities` — TRUNCATE users + новая таблица), поднимет всё.
 
-На сервере проверь:
+Проверка:
 ```bash
-docker compose ps
-# должен быть контейнер crypto-engine со status Up
-
-docker compose logs engine | tail -20
-# должны быть строки:  "engine_starting", "command_listener_started", "state_manager_started"
+ssh -p <port> <user>@<host> 'docker compose -f /docker/crypto-dashboard/docker-compose.yml ps'
+# должны быть Up healthy: crypto-backend, crypto-engine, crypto-frontend
 ```
 
-### 2. GitHub Secrets — проверка
+### 4. Открой фронт
 
-Перед push'ом убедись, что в GitHub → Settings → Secrets → Actions есть **все**:
-
-| Secret | Что в нём |
-|---|---|
-| `DEPLOY_SSH_HOST`, `DEPLOY_SSH_PORT`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_PATH` | SSH-доступ к серверу |
-| `BACKEND_DATABASE_URL` | `postgresql+asyncpg://...` |
-| `BACKEND_REDIS_URL` | `redis://...` |
-| `BACKEND_JWT_SECRET` | случайный токен (64+ символа) |
-| `BACKEND_ENCRYPTION_KEY` | Fernet-ключ (44 символа base64, заканчивается `=`) |
-| `BACKEND_CORS_ORIGINS` | URL фронта, например `https://dashboard.example.com` |
-| `BACKEND_LOG_LEVEL` | `INFO` или `DEBUG` |
-
-`ENGINE_DATABASE_URL`, `ENGINE_REDIS_URL`, `ENGINE_ENCRYPTION_KEY` **отдельно создавать не надо** — `deploy.yml` использует те же значения от backend секретов (движок шарит БД, Redis и Fernet-ключ с бэком).
-
-### 3. Открой фронт
-
-`https://<твой-домен>` или `https://<ip-сервера>:5173` (зависит от nginx настройки).
+`https://crypto.shilkaphilosophy.ru` → редиректит на `/login`. Карточка с 4 круглыми соц-кнопками + email-форма с hCaptcha.
 
 ---
 
 ## B. Локально (Docker)
 
-Если хочешь поднять всё локально для разработки:
+### 1. Заполни `.env`
 
 ```bash
-# 1. Убедись, что .env заполнен (он в gitignored, уже создан с реальными ключами)
-grep -E "^(BACKEND|ENGINE)_(JWT_SECRET|ENCRYPTION_KEY)" .env
-# Должны быть длинные значения, не CHANGE_ME_GENERATE_LOCALLY
-# ENGINE_ENCRYPTION_KEY ОБЯЗАН совпадать с BACKEND_ENCRYPTION_KEY
-
-# 2. Поднять всё (Postgres + Redis + backend + engine + frontend):
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
-
-# 3. Проверить:
-docker compose ps
-curl http://localhost:8000/healthz   # → {"db":"ok","redis":"ok"}
-docker compose logs engine | tail -20
+cp .env.example .env  # gitignored
+# Открой .env и заполни обязательные:
+#   - BACKEND_JWT_SECRET, BACKEND_ENCRYPTION_KEY (сгенерировать через python -c)
+#   - ENGINE_ENCRYPTION_KEY = BACKEND_ENCRYPTION_KEY (одинаковые!)
+#   - RESEND_API_KEY + RESEND_SENDER_EMAIL (если хочешь реально получать письма)
+#   - VITE_HCAPTCHA_SITEKEY + HCAPTCHA_SECRET (если хочешь реально проверять капчу)
+# Локально можно отключить капчу через BACKEND_CAPTCHA_DISABLED=true.
 ```
 
-Фронт будет на `http://localhost:5173`.
+Сгенерировать новые секреты:
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(64))"        # JWT
+python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  # Fernet
+```
+
+### 2. Поднять весь стек
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
+```
+
+Что поднимется:
+- `crypto-db` (Postgres), `crypto-redis`, `crypto-backend`, `crypto-frontend`, `crypto-engine`.
+- `migrate` прогонит 0001 и 0002 миграции.
+
+### 3. Проверь
+
+```bash
+curl http://localhost:8000/healthz   # → {"backend":"ok","postgres":"ok","redis":"ok"}
+docker compose ps                     # все Up healthy
+```
+
+Открой фронт: http://localhost:5173
 
 ---
 
-## C. Flow в UI: от регистрации до первой сделки
+## C. Flow логина в UI
 
-После того как фронт открылся (`/login`):
+### Email + код
+1. На `/login` введи email → нажми «Отправить код».
+2. На указанный адрес придёт письмо от Resend с 6-значным кодом (~10 секунд).
+3. Введи код в поле → «Войти». Аккаунт создаётся автоматически при первом входе.
 
-### Шаг 1 — Регистрация
+### Через OAuth (Google/Yandex/GitHub)
+1. Кликни круглую иконку.
+2. Браузер уйдёт к провайдеру → подтверждение → вернётся на `/auth/callback?access=...&refresh=...`.
+3. Фронт извлечёт токены и редиректнёт на `/`.
 
-1. Открой `/register` (или нажми «Зарегистрироваться» на странице логина).
-2. Введи email и пароль (минимум 8 символов).
-3. После регистрации тебя автоматически залогинит и перебросит на `/`.
+### Через Telegram
+1. Кликни голубую иконку.
+2. Откроется попап Telegram → авторизация.
+3. Telegram передаст данные обратно через JS callback → бэк проверит HMAC → выдаст JWT.
 
-> **Опциональная альтернатива на локалке:** запустить `python scripts/seed_dev_setup.py` — он создаст dev-пользователя `dev@local.test` / `dev-password-123` напрямую в БД, без UI. Удобно при повторных сбросах локальной БД. На проде не нужен.
-
-### Шаг 2 — Добавить API ключи Binance Testnet
-
-1. Возьми ключи: https://testnet.binance.vision/ → «Generate HMAC_SHA256 Key».
-2. На фронте: **Настройки** (sidebar) → форма «Добавить ключ Binance Testnet».
-3. Вставь **API Key** и **Secret Key**, нажми «Сохранить».
-4. Бэк прогонит ключи через CCXT в **sandbox-режиме** (`set_sandbox_mode(True)`) и сделает `fetch_balance` для валидации. Это занимает 2–5 секунд.
-5. Если ключи валидные — увидишь зелёный alert «Ключ проверен и сохранён», и запись появится в списке «Подключённые ключи». Бэк шифрует их Fernet'ом перед сохранением в БД.
-
-Если что-то пошло не так:
-- `authentication failed: ...` — ключи неверные или не от testnet (у production-ключа нельзя проверить sandbox).
-- `network error: ...` — на сервере нет доступа к `testnet.binance.vision` (фаервол).
-- `validation failed: ...` — другая ошибка CCXT, смотри детали в alert.
-
-### Шаг 3 — Создать стратегию
-
-1. **Стратегии** → «Создать стратегию» (правый верхний угол).
-2. Форма:
-   - **API-ключи** — выбери только что добавленные.
-   - **Торговая пара** — `BTC/USDT` (или любая доступная на testnet).
-   - **Таймфрейм** — `1m` для быстрых сигналов, `15m` для более редких.
-   - **Тип стратегии** — `SmaCross` (пока только она в реестре движка).
-   - **Параметры** (дефолты):
-     - `fast_period=5` — короткая SMA
-     - `slow_period=20` — длинная SMA
-     - `order_size=0.001` — размер сделки в BTC (минимум для Binance)
-3. Нажми **«Сохранить и запустить»** — фронт отправит `POST /api/bots`, потом `POST /api/bots/{id}/start`. Бэк опубликует команду `engine.commands.start` в Redis, движок её подхватит.
-
-### Шаг 4 — Наблюдай
-
-На странице **Стратегии**:
-- Бот появился в списке со статусом `Запускается` → через 1–2 секунды `Активна`.
-- Polling каждые 5 секунд автоматически обновляет статусы.
-
-Что движок делает в этот момент:
-1. Получает команду из Redis.
-2. Читает конфиг бота из БД.
-3. Расшифровывает API-ключи Fernet'ом.
-4. Создаёт CCXT-адаптер с `set_sandbox_mode(True)`.
-5. Догружает `slow_period` исторических свечей (для прогрева SMA).
-6. Подписывается на live-свечи через `watch_ohlcv` (WebSocket).
-7. На каждой свече вычисляет SMA, при пересечении публикует сигнал.
-8. RiskManager проверяет, OrderExecutor создаёт ордер, публикует `engine.new_trade`.
-9. Бэк подписан на `engine.new_trade` — пишет в таблицу `orders`.
-
-### Шаг 5 — Проверить сделки
-
-Когда стратегия даст сигнал и Binance исполнит ордер:
-- На сервере: `docker compose exec postgres psql -U user -d crypto-db -c "SELECT id, symbol, side, status FROM orders ORDER BY created_at DESC LIMIT 5;"`
-- Локально: то же самое.
-
-В будущих фазах (3.x и далее) фронт будет получать эти сделки через WebSocket и показывать в реальном времени — пока проверять через БД.
+### Дальше
+- **Settings** → добавь Binance Testnet API ключи.
+- **Strategies** → «Создать стратегию» → SmaCross BTC/USDT 1m → «Сохранить и запустить».
 
 ---
 
@@ -145,21 +129,19 @@ docker compose logs engine | tail -20
 
 | Симптом | Причина | Решение |
 |---|---|---|
-| `/login` показывает «Не удалось войти» | Неверный email/пароль | Сначала зарегистрируйся на `/register` |
-| Settings: «authentication failed» при сохранении ключа | Бэк проверяет ключ через CCXT sandbox — твой ключ невалиден или production | Используй ключи с **testnet.binance.vision**, не с binance.com |
-| Settings: «network error» при сохранении ключа | На бэк-контейнере нет доступа к testnet.binance.vision | Проверь, что egress на 443 открыт |
-| Бот создан, статус `Запускается` навсегда | Движок не подхватил команду — не подписан или упал | `docker compose logs engine` — ищи `credential_decrypt_failed` (ключи Fernet разные!) или ошибки соединения |
-| Бот в `Ошибка` | См. `engine.strategy_error` в Redis или логах | `docker compose exec redis redis-cli SUBSCRIBE engine.strategy_error` |
-| `engine` рестартится в цикле | Падает на старте, обычно плохой `.env` | `docker compose logs engine` покажет stacktrace pydantic settings |
-| 0 subscribers при публикации команды | Engine-контейнер не запущен | `docker compose up -d engine` и подожди ~5 сек |
-| Сделки нет ни через час | SMA не пересекается / нет средств | Поменяй параметры (`fast=3, slow=8`) или пополни testnet-баланс через testnet.binance.vision |
+| Email не приходит | `RESEND_API_KEY` пустой / домен не верифицирован | Проверь .env и dashboard Resend |
+| `400 captcha rejected` | `HCAPTCHA_SECRET` не совпадает с sitekey | Перепроверь оба ключа в hCaptcha dashboard |
+| `503 OAuth provider not configured` | пустые `*_CLIENT_ID/SECRET/REDIRECT_URI` | Добавь секреты в env |
+| Telegram-виджет: «origin not allowed» | в @BotFather домен не установлен | `/setdomain` для бота |
+| Логин Google → "redirect_uri_mismatch" | URI в Google Console не совпадает с `GOOGLE_REDIRECT_URI` | Подгони — обычно различия в `https://` или trailing `/` |
+| `429 too many code requests` | Rate limit на IP — 3 запроса в минуту | Подожди 1 минуту |
+| `429 too many wrong attempts` | 5 неверных кодов — ключ удалён | Запроси новый код |
 
 ---
 
-## Что важно понимать
+## Известные ограничения (Phase 2)
 
-- **Один Fernet-ключ для всего**. `BACKEND_ENCRYPTION_KEY` шифрует то, что движок потом расшифровывает через `ENGINE_ENCRYPTION_KEY`. Если значения разные — движок упадёт с `credential_decrypt_failed`.
-- **Только testnet на Phase 1**. Бэк по умолчанию валидирует ключи в sandbox, движок всегда создаёт CCXT с `set_sandbox_mode(True)`. Production-режим — отдельная задача (Phase 4+).
-- **Бот = одна стратегия на одной паре**. Можно создать несколько ботов, они будут крутиться параллельно в одном engine-процессе.
-- **Минимальный размер ордера** для Binance BTC/USDT testnet — 0.0001 BTC по объёму или 5 USDT по notional. SMA Cross с `order_size=0.001` BTC (~$60 при цене 60k) проходит.
-- **Кеш WebSocket-свечей** обновляется в реальном времени; для бэктестинга используется отдельный pipeline (Phase 7 в ROADMAP).
+- Токены лежат в localStorage (XSS-vulnerable). HttpOnly cookies — Phase 3+.
+- Нет 2FA / TOTP.
+- Нет восстановления через email при потере OAuth (но если у пользователя есть тот же email — он попадёт в свой аккаунт через email-код, identity_service сам слинкует).
+- Нет blacklist'а refresh-токенов.
