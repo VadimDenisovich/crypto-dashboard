@@ -52,6 +52,17 @@ services:
       GH_REDIRECT_URI: ${GH_REDIRECT_URI}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME}
+      # === Phase 4: backtest ===
+      # backtest_main находится в trade-engine-crypto/src/, монтируется ниже.
+      PYTHONPATH: /opt/engine/src
+      BACKEND_BACKTEST_CMD: "python -m backtest_main"
+      BACKEND_HISTORICAL_DIR: /data/historical
+      BACKEND_BACKTEST_TIMEOUT_SEC: ${BACKEND_BACKTEST_TIMEOUT_SEC:-1800}
+    volumes:
+      # Источник движка (read-only) — backend subprocess'ом дёргает backtest_main.
+      - ./trade-engine-crypto:/opt/engine:ro
+      # Кэш исторических данных от scripts/fetch_historical.py.
+      - ./data/historical:/data/historical:ro
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
