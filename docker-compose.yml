@@ -61,8 +61,9 @@ services:
     volumes:
       # Источник движка (read-only) — backend subprocess'ом дёргает backtest_main.
       - ./trade-engine-crypto:/opt/engine:ro
-      # Кэш исторических данных от scripts/fetch_historical.py.
-      - ./data/historical:/data/historical:ro
+      # Кэш исторических данных: scripts/fetch_historical.py + гибридная докачка
+      # движком при бэктесте (нужен rw, чтобы движок мог сохранять parquet-кэш).
+      - ./data/historical:/data/historical
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
