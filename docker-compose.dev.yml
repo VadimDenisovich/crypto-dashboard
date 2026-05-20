@@ -13,7 +13,7 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
     ports:
       - "5432:5432"
     healthcheck:
@@ -66,7 +66,16 @@ services:
     volumes:
       - ./backend/src:/app/src
       - ./backend/alembic:/app/alembic
-    command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command:
+      [
+        "uvicorn",
+        "src.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--reload",
+      ]
 
   frontend:
     image: !reset null
