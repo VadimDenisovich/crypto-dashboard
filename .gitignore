@@ -45,4 +45,5 @@ tmp/
 .context/
 
 # === Backtest historical data (большие parquet файлы) ===
-data/historical/
+data/historical/*
+!data/historical/.gitkeep
