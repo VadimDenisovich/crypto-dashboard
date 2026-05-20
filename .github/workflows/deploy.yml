@@ -189,10 +189,15 @@ jobs:
             TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
             TELEGRAM_BOT_USERNAME=$TELEGRAM_BOT_USERNAME
             EOF
+            # Сбрасываем любые локальные правки (в т.ч. в submodule'ах) перед
+            # синком — иначе ручные hotfix'ы на сервере ломают git checkout.
+            git submodule foreach --recursive 'git reset --hard && git clean -fd' || true
+            git reset --hard || true
             git fetch --recurse-submodules origin main
-            git checkout main
+            git checkout -f main
             git reset --hard origin/main
-            git submodule update --init --recursive
+            git submodule sync --recursive
+            git submodule update --init --recursive --force
             docker compose pull
             docker compose run --rm migrate
             docker compose up -d --remove-orphans
