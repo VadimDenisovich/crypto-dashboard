@@ -3,6 +3,8 @@ name: ci
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -30,13 +32,17 @@ jobs:
       BACKEND_REDIS_URL: redis://localhost:6379/0
       BACKEND_JWT_SECRET: ci-secret-not-for-prod
       BACKEND_ENCRYPTION_KEY: ZmRldi1mZXJuZXQta2V5LXBsZWFzZS1jaGFuZ2UtaW4tcHJvZD0=
+      BACKEND_CAPTCHA_DISABLED: "true"
+      # Integration tests share Postgres with unit tests but use separate Redis DB index
+      INTEGRATION_DB_URL: postgresql+asyncpg://ci:ci@localhost:5432/ci_db
+      INTEGRATION_REDIS_URL: redis://localhost:6379/1
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.14"
           cache: "pip"
       - name: Install backend
         working-directory: backend
@@ -46,11 +52,11 @@ jobs:
       - name: Run alembic migrations
         working-directory: backend
         run: alembic upgrade head
-      - name: Run tests
+      - name: Run tests (unit + integration)
         working-directory: backend
-        run: pytest -q
+        run: pytest tests/ -v
 
-  frontend-build:
+  frontend-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,15 +64,18 @@ jobs:
           submodules: recursive
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 11
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "pnpm"
           cache-dependency-path: frontend/pnpm-lock.yaml
       - name: Install
         working-directory: frontend
         run: pnpm install --frozen-lockfile
+      - name: Run tests
+        working-directory: frontend
+        run: pnpm test
       - name: Build
         working-directory: frontend
         env:
@@ -76,7 +85,7 @@ jobs:
 
   docker-build:
     runs-on: ubuntu-latest
-    needs: [backend-test, frontend-build]
+    needs: [backend-test, frontend-check]
     steps:
       - uses: actions/checkout@v4
         with:
