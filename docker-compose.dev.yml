@@ -42,6 +42,9 @@ services:
     image: !reset null
     build:
       context: ./backend
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
     environment:
       BACKEND_DATABASE_URL: postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
       BACKEND_REDIS_URL: redis://redis:6379/0
@@ -53,6 +56,9 @@ services:
     image: !reset null
     build:
       context: ./backend
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
     environment:
       BACKEND_DATABASE_URL: postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
       BACKEND_REDIS_URL: redis://redis:6379/0
