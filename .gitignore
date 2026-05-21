@@ -41,9 +41,6 @@ build/
 tmp/
 /tmp/
 
-# === Другие файлы, которые не должны попадать в репозиторий ===
-.context/
-
 # === Backtest historical data (большие parquet файлы) ===
 data/historical/*
 !data/historical/.gitkeep
